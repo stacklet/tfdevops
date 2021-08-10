@@ -1,0 +1,9 @@
+.tox/
+.coverage
+.tfcache/
+*pyc
+__pycache__
+*egg-info
+dist/
+pytestdebug.log
+.venv
