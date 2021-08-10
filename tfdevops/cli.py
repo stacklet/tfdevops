@@ -1,5 +1,5 @@
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, WaiterError
 from botocore.waiter import WaiterModel, create_waiter_with_client
 import click
 import json
@@ -12,10 +12,32 @@ import hcl2
 
 log = logging.getLogger("tfdevops")
 
+# manually construct waiter models for change sets since the service
+# team didn't bother to publish one in their smithy models.
+# re smithy https://awslabs.github.io/smithy/
 
-ChangeSetExecWaiter = {
+ChangeSetWaiters = {
     "version": 2,
     "waiters": {
+        "ChangeSetDeleteComplete": {
+            "operation": "DescribeChangeSet",
+            "delay": 10,
+            "maxAttempts": 40,
+            "acceptors": [
+                {
+                    "expected": "DELETE_FAILED",
+                    "matcher": "path",
+                    "state": "failure",
+                    "argument": "Status",
+                },
+                {
+                    "expected": "DELETE_COMPLETE",
+                    "matcher": "path",
+                    "argument": "Status",
+                    "state": "success",
+                },
+            ],
+        },
         "ChangeSetExecuteComplete": {
             "operation": "DescribeChangeSet",
             "delay": 10,
@@ -34,14 +56,14 @@ ChangeSetExecWaiter = {
                     "state": "success",
                 },
             ],
-        }
+        },
     },
 }
 
 
 @click.group()
 def cli():
-    """Terraform to AWS DevOps Guru"""
+    """Terraform to Cloudformation and AWS DevOps Guru"""
     logging.basicConfig(level=logging.INFO)
 
 
@@ -49,14 +71,16 @@ def cli():
 @click.option("-t", "--template", type=click.File("r"))
 @click.option("-r", "--resources", type=click.File("r"))
 @click.option("-s", "--stack-name", default="GuruStack")
-def deploy(template, resources, stack_name):
+@click.option("--guru", is_flag=True, default=False)
+def deploy(template, resources, stack_name, guru):
+    """Deploy a cloudformation stack with imported resources"""
     stack_content = json.load(template)
     import_resources = json.load(resources)
     client = boto3.client("cloudformation")
 
-    log.info("Checking stack state")
     try:
-        stack_info = client.describe_stacks(StackName=stack_name)[0]
+        stack_info = client.describe_stacks(StackName=stack_name)["Stacks"][0]
+        log.info("Found existing stack, state:%s", stack_info["StackStatus"])
     except ClientError:
         # somewhat bonkers the service team hasn't put a proper customized exception in place for a common error issue.
         # ala they have one for client.exceptions.StackNotFoundException but didn't bother
@@ -66,14 +90,19 @@ def deploy(template, resources, stack_name):
 
     # so for each stack and each resource we have to deal with the complexity
     # of cfn's underlying state workflow for each, as outline by the state
-    # machine complexity. This is a great example
-    # of why terraform represent's sanity, as well why customer feedback driven
-    # product development leading to a worse experience for customers.
+    # machine complexity.
+    #
+    # This is a great example of why terraform represent's sanity, as well how
+    # customer feedback driven product development (aka we want rollback) can lead
+    # to a worse experience for customers, if one doesn't keep the bigger picture in mind.
+    #
     # It also leads to brittleness and complexity for any tool building on
     # cloudformation, exhibit A being the unusability of stacksets in the
     # real world.
+    #
     # Its gets worse when you consider the compatibility complexity matrix
-    # on the various versions and bugs.
+    # on the various versions and bugs, like the lack of a proper error code
+    # for stack not found above.
 
     # CREATE_COMPLETE
     # CREATE_FAILED
@@ -104,6 +133,8 @@ def deploy(template, resources, stack_name):
         waiter = client.get_waiter("stack_delete_complete")
         waiter.wait(StackName=stack_name)
         stack_info = None
+    elif stack_info and stack_info["StackStatus"] == "REVIEW_IN_PROGRESS":
+        pass
     elif stack_info and stack_info["StackStatus"].endswith("IN_PROGRESS"):
         log.info(
             "Cloudformation stack undergoing change %s, please try again later",
@@ -126,10 +157,42 @@ def deploy(template, resources, stack_name):
             log.info("All resources have already been imported")
             return
 
+    # Check for an extant change set
+    try:
+        cinfo = client.describe_change_set(
+            StackName=stack_name, ChangeSetName="GuruImport"
+        )
+    except client.exceptions.ChangeSetNotFoundException:
+        cinfo = None
+
+    if cinfo and cinfo["Status"] == "FAILED":
+        log.warning(
+            f"Previous change set failed with reason %s", cinfo.get("StatusReason", "")
+        )
+        client.delete_change_set(StackName=stack_name, ChangeSetName="GuruImport")
+        waiter = create_waiter_with_client(
+            "ChangeSetDeleteComplete", WaiterModel(ChangeSetWaiters), client
+        )
+        try:
+            waiter.wait(
+                StackName=stack_name,
+                ChangeSetName="GuruImport",
+                WaiterConfig={"Delay": 10, "MaxAttempts": 60},
+            )
+        except WaiterError as e:
+            if (
+                "Error" in e.last_response
+                and e.last_response["Error"]["Code"] == "ChangeSetNotFound"
+            ):
+                # happy path instant delete
+                pass
+            else:
+                raise
+
     log.info(
         "Creating import change set, %d resources to import", len(import_resources)
     )
-    # returns ids which are mostly useless, because we have to use unique at moment names
+    # returns ids which are mostly useless, because we have to use unique at moment names in the api
     client.create_change_set(
         StackName=stack_name,
         ChangeSetType="IMPORT",
@@ -150,12 +213,21 @@ def deploy(template, resources, stack_name):
     # FAILED
 
     waiter = client.get_waiter("change_set_create_complete")
-    waiter.wait(
-        StackName=stack_name,
-        ChangeSetName="GuruImport",
-        WaiterConfig={"Delay": 10, "MaxAtempts": 60},
-    )
+    try:
+        waiter.wait(
+            StackName=stack_name,
+            ChangeSetName="GuruImport",
+            WaiterConfig={"Delay": 10, "MaxAtempts": 60},
+        )
+    except WaiterError as e:
+        log.error(
+            "Changeset creation failed status: %s reason: %s",
+            e.last_response["Status"],
+            e.last_response["StatusReason"],
+        )
+        return
 
+    log.info("Executing change set to import resources")
     client.execute_change_set(ChangeSetName="GuruImport", StackName=stack_name)
 
     # Aha changesets have another state workflow representing execution progress
@@ -165,14 +237,43 @@ def deploy(template, resources, stack_name):
     # EXECUTE_IN_PROGRESS
     # OBSOLETE
     # UNAVAILABLE
+
     waiter = create_waiter_with_client(
-        "ChangeSetExecuteComplete", WaiterModel(ChangeSetExecWaiter), client
+        "ChangeSetExecuteComplete", WaiterModel(ChangeSetWaiters), client
     )
-    waiter.wait(
-        StackName=stack_name,
-        ChangeSetName="GuruImport",
-        WaiterConfig={"Delay": 10, "MaxAttempts": 60},
-    )
+    try:
+        waiter.wait(
+            StackName=stack_name,
+            ChangeSetName="GuruImport",
+            WaiterConfig={"Delay": 10, "MaxAttempts": 60},
+        )
+    except WaiterError as e:
+        # the happy path is a changeset executes really quickly and disappears while the status of
+        # stack itself reflects the actual async progress. lulz, we do a waiter because
+        # who knows the other 1% of the times, because the cfn exposed model of change set
+        # suggests it may have other states, rather than instantly disappearing on execution.
+        if (
+            "Error" in e.last_response
+            and e.last_response["Error"]["Code"] == "ChangeSetNotFound"
+        ):
+            # common happy path, change set disappears before change is complete :/
+            pass
+        else:
+            raise
+
+    # but now we have to wait for the stack status to reflect back on steady state
+    waiter = client.get_waiter("stack_import_complete")
+    log.info("Waiting for import to complete")
+    waiter.wait(StackName=stack_name, WaiterConfig={"Delay": 10, "MaxAttempts": 60})
+
+    log.info("Cloudformation Stack Deployed - Terraform resources imported")
+    if guru:
+        log.info("Enrolling terraform stack into devops guru")
+        guru = boto3.client("devops-guru")
+        guru.update_resource_collection(
+            Action="ADD",
+            ResourceCollection={"CloudFormation": {"StackNames": [stack_name]}},
+        )
 
 
 @cli.command()
@@ -194,6 +295,7 @@ def validate(template):
             "schema": schema,
         }
 
+    template_error = False
     for logical_id, resource in data.get("Resources", {}).items():
         rmeta = type_schema_map[resource["Type"]]
         props = set(resource["Properties"])
@@ -203,16 +305,17 @@ def validate(template):
             log.warning(
                 "%s -> %s unknown props %s" % (logical_id, resource["Type"], unknown)
             )
-            # continue
 
         errors = list(rmeta["validator"].iter_errors(resource["Properties"]))
         if errors:
             log.warning(
                 "%s -> %s errors %d" % (logical_id, resource["Type"], len(errors))
             )
+            template_error = True
         for e in errors:
-            log.warning(str(e))
-            break
+            log.warning("Resource %s error:\n %s" % (logical_id, str(e)))
+    if template_error is False:
+        log.info("Congratulations! - the template validates")
 
 
 @cli.command()
@@ -232,7 +335,7 @@ def validate(template):
 )
 @click.option("--types", multiple=True, help="Only consider these terraform types")
 def cfn(module, template, resources, types):
-    """Export a cloudformation template"""
+    """Export a cloudformation template and importable resources"""
     state = get_state_resources(module)
     type_map = get_type_mapping()
 
@@ -401,7 +504,7 @@ class EventRuleTranslator(Translator):
 
 class DbInstance(Translator):
 
-    # tf_type = "db_instance"
+    tf_type = "db_instance"
     id = "DBInstanceIdentifier"
     strip = (
         "hosted_zone_id",
@@ -434,6 +537,7 @@ class DbInstance(Translator):
     def get_properties(self, tf):
         cfr = super().get_properties(tf)
         cfr["Port"] = str(cfr["Port"])
+        cfr["AllocatedStorage"] = str(cfr["AllocatedStorage"])
         return cfr
 
 
@@ -627,6 +731,12 @@ class DynamodbTable(Translator):
 if __name__ == "__main__":
     try:
         cli()
+    except WaiterError as e:
+        log.warning(
+            "failed waiting for async operation error\n reason: %s\n response: %s"
+            % (e, e.last_response)
+        )
+        raise
     except SystemExit:
         raise
     except Exception:
