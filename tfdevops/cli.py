@@ -5,15 +5,23 @@ import click
 import json
 import jsonschema
 import jmespath
+import hcl2
 import logging
 from pathlib import Path
 import subprocess
-import hcl2
+from urllib import parse
+
+
+__author__ = "Kapil Thangavelu <https://twitter.com/kapilvt>"
 
 log = logging.getLogger("tfdevops")
 
+DEFAULT_STACK_NAME = "GuruStack"
+DEFAULT_CHANGESET_NAME = "GuruImport"
+
 # manually construct waiter models for change sets since the service
-# team didn't bother to publish one in their smithy models.
+# team didn't bother to publish one in their smithy models, perhaps
+# understandbly since one only needs these for unhappy paths.
 # re smithy https://awslabs.github.io/smithy/
 
 ChangeSetWaiters = {
@@ -69,12 +77,24 @@ def cli():
 
 @cli.command()
 @click.option("-t", "--template", type=click.File("r"))
-@click.option("-r", "--resources", type=click.File("r"))
-@click.option("-s", "--stack-name", default="GuruStack")
+@click.option("-r", "--resources", type=click.File("r"), required=True)
+@click.option("-u", "--template-url", help="s3 path to template")
+@click.option("-s", "--stack-name", default=DEFAULT_STACK_NAME)
+@click.option("--change-name", default=DEFAULT_CHANGESET_NAME)
 @click.option("--guru", is_flag=True, default=False)
-def deploy(template, resources, stack_name, guru):
-    """Deploy a cloudformation stack with imported resources"""
-    stack_content = json.load(template)
+def deploy(template, resources, stack_name, guru, template_url, change_name):
+    """Deploy a cloudformation stack with imported resources
+
+    Imports terraform resources into a cloudformation stack.
+
+    Consumes outputs of cfn generation subcommand.
+
+    Specify --guru flag to automatically enable Amazon DevOps Guru.
+    """
+    if not template and not template_url:
+        raise SyntaxError("Either template or template_url parameter must be passed")
+    if template:
+        stack_content = json.load(template)
     import_resources = json.load(resources)
     client = boto3.client("cloudformation")
 
@@ -89,7 +109,7 @@ def deploy(template, resources, stack_name, guru):
         stack_info = None
 
     # so for each stack and each resource we have to deal with the complexity
-    # of cfn's underlying state workflow for each, as outline by the state
+    # of cfn's underlying state workflow for each, as outlined by the internal state
     # machine complexity.
     #
     # This is a great example of why terraform represent's sanity, as well how
@@ -103,7 +123,9 @@ def deploy(template, resources, stack_name, guru):
     # Its gets worse when you consider the compatibility complexity matrix
     # on the various versions and bugs, like the lack of a proper error code
     # for stack not found above.
-
+    # Nonetheless, we perserve and try to present a humane interface.
+    #
+    # Stack State Enumeration:
     # CREATE_COMPLETE
     # CREATE_FAILED
     # CREATE_IN_PROGRESS
@@ -160,7 +182,7 @@ def deploy(template, resources, stack_name, guru):
     # Check for an extant change set
     try:
         cinfo = client.describe_change_set(
-            StackName=stack_name, ChangeSetName="GuruImport"
+            StackName=stack_name, ChangeSetName=change_name
         )
     except client.exceptions.ChangeSetNotFoundException:
         cinfo = None
@@ -169,14 +191,14 @@ def deploy(template, resources, stack_name, guru):
         log.warning(
             f"Previous change set failed with reason %s", cinfo.get("StatusReason", "")
         )
-        client.delete_change_set(StackName=stack_name, ChangeSetName="GuruImport")
+        client.delete_change_set(StackName=stack_name, ChangeSetName=change_name)
         waiter = create_waiter_with_client(
             "ChangeSetDeleteComplete", WaiterModel(ChangeSetWaiters), client
         )
         try:
             waiter.wait(
                 StackName=stack_name,
-                ChangeSetName="GuruImport",
+                ChangeSetName=change_name,
                 WaiterConfig={"Delay": 10, "MaxAttempts": 60},
             )
         except WaiterError as e:
@@ -192,15 +214,20 @@ def deploy(template, resources, stack_name, guru):
     log.info(
         "Creating import change set, %d resources to import", len(import_resources)
     )
-    # returns ids which are mostly useless, because we have to use unique at moment names in the api
-    client.create_change_set(
+    params = dict(
         StackName=stack_name,
         ChangeSetType="IMPORT",
-        TemplateBody=json.dumps(stack_content),
         Capabilities=["CAPABILITY_NAMED_IAM"],
-        ChangeSetName="GuruImport",
+        ChangeSetName=change_name,
         ResourcesToImport=import_resources,
     )
+    if template_url:
+        params["TemplateURL"] = template_url
+    elif template:
+        params["TemplateBody"] = json.dumps(stack_content)
+
+    # returns ids which are mostly useless, because we have to use unique at moment names in the api
+    client.create_change_set(**params)
 
     # Change Set States
     # CREATE_COMPLETE
@@ -216,7 +243,7 @@ def deploy(template, resources, stack_name, guru):
     try:
         waiter.wait(
             StackName=stack_name,
-            ChangeSetName="GuruImport",
+            ChangeSetName=change_name,
             WaiterConfig={"Delay": 10, "MaxAtempts": 60},
         )
     except WaiterError as e:
@@ -228,7 +255,7 @@ def deploy(template, resources, stack_name, guru):
         return
 
     log.info("Executing change set to import resources")
-    client.execute_change_set(ChangeSetName="GuruImport", StackName=stack_name)
+    client.execute_change_set(ChangeSetName=change_name, StackName=stack_name)
 
     # Aha changesets have another state workflow representing execution progress
     # AVAILABLE
@@ -244,7 +271,7 @@ def deploy(template, resources, stack_name, guru):
     try:
         waiter.wait(
             StackName=stack_name,
-            ChangeSetName="GuruImport",
+            ChangeSetName=change_name,
             WaiterConfig={"Delay": 10, "MaxAttempts": 60},
         )
     except WaiterError as e:
@@ -333,9 +360,17 @@ def validate(template):
     type=click.File("w"),
     help="Output file for resources to import",
 )
+@click.option(
+    "--s3-path",
+    help="S3 Bucket and Prefix (s3://bucket/pre/fix) for oversized templates and resources",
+)
 @click.option("--types", multiple=True, help="Only consider these terraform types")
-def cfn(module, template, resources, types):
-    """Export a cloudformation template and importable resources"""
+def cfn(module, template, resources, types, s3_path):
+    """Export a cloudformation template and importable resources
+
+    s3 path only needs to be specified when handling resources with verbose definitions (step functions)
+    or a large cardinality of resources which would overflow cloudformation's api limits on templates (50k).
+    """
     state = get_state_resources(module)
     type_map = get_type_mapping()
 
@@ -347,20 +382,21 @@ def cfn(module, template, resources, types):
     translators = Translator.get_translator_map()
     ids = []
 
+    s3_client = s3_path and boto3.client("s3")
     for k, v in state.items():
         provider, k = k.split("_", 1)
         if types and k not in types:
             continue
         if k not in type_map:
-            log.warning("no cfn type for tf %s" % k)
+            log.debug("no cfn type for tf %s" % k)
             continue
         cfn_type = type_map[k]
         translator_class = translators.get(k)
         if not translator_class:
-            log.info("no translator for %s" % k)
+            log.debug("no translator for %s" % k)
             continue
         else:
-            translator = translator_class()
+            translator = translator_class({"s3_path": s3_path, "s3": s3_client})
 
         for r in v:
             rname = translator.get_name(r)
@@ -384,7 +420,23 @@ def cfn(module, template, resources, types):
                     }
                 )
 
-    template.write(json.dumps(ctemplate))
+    # overflow to s3 for actual deployment on large templates
+    serialized_template = json.dumps(ctemplate).encode('utf8')
+
+    if s3_path: # and len(serialized_template) > 49000:
+        s3_url = format_template_url(
+            s3_client,
+            format_s3_path(
+                write_s3_key(
+                    s3_client, s3_path, "%s.json" % DEFAULT_STACK_NAME, ctemplate
+                )
+            ),
+        )
+        log.info("wrote s3 template url: %s", s3_url)
+    elif len(serialized_template) > 49000:
+        log.warning("template too large for local deploy, pass --s3-path to deploy from s3")
+
+    template.write(json.dumps(ctemplate, indent=2))
 
     if resources:
         resources.write(json.dumps(ids, indent=2))
@@ -417,6 +469,51 @@ def get_state_resources(tf_dir):
     return state_resources
 
 
+def write_s3_key(client, s3_path, key, content):
+    kinfo = {}
+    parsed = parse.urlparse(s3_path)
+    kinfo["Bucket"] = parsed.netloc
+    prefix = parsed.path.strip("/")
+    kinfo["Key"] = "%s/%s" % (prefix, key)
+    if not isinstance(content, str):
+        content = json.dumps(content)
+    result = client.put_object(
+        Bucket=kinfo["Bucket"],
+        Key=kinfo["Key"],
+        ACL="private",
+        ServerSideEncryption="AES256",
+        Body=content,
+    )
+    if result.get("VersionId"):
+        kinfo["Version"] = result["VersionId"]
+    return kinfo
+
+
+def format_s3_path(kinfo):
+    t = "s3://{Bucket}/{Key}"
+    if "Version" in kinfo:
+        t += "?versionId={Version}"
+    return t.format(**kinfo)
+
+
+def format_template_url(client, s3_path):
+    parsed = parse.urlparse(s3_path)
+    bucket = parsed.netloc
+    key = parsed.path.strip('/')
+    version_id = None
+    if parsed.query:
+        query = parse.parse_qs(parsed.query)
+        version_id = query.get("versionId", (None,))
+    region = (
+        client.get_bucket_location(Bucket=bucket).get("LocationConstraint")
+        or "us-east-1"
+    )
+    url = "https://{bucket}.s3.{region}.amazonaws.com/{key}"
+    if version_id:
+        url += "?versionId={version_id}"
+    return url.format(bucket=bucket, key=key, version_id=version_id, region=region)
+
+
 class Translator:
 
     id = None
@@ -424,6 +521,9 @@ class Translator:
     strip = ()
     rename = {}
     flatten = ()
+
+    def __init__(self, config):
+        self.config = config
 
     @classmethod
     def get_translator_map(cls):
@@ -435,9 +535,6 @@ class Translator:
 
     def get_name(self, r):
         return self._camel_str(r["name"])
-
-    def get_sub_resources(self, r):
-        return
 
     def get_identity(self, r):
         return {self.id: r["values"]["name"]}
@@ -577,19 +674,6 @@ class Sqs(Translator):
             cfr["RedrivePolicy"] = json.loads(cfr["RedrivePolicy"])
         return cfr
 
-    def get_sub_resources(self, tfr):
-        p = tfr["values"].get("policy")
-        if not p:
-            return
-        return {
-            "%sPolicy"
-            % self._camel_str(tfr["name"]): {
-                "Type": "AWS::SQS::QueuePolicy",
-                "Queues": [tfr["values"]["url"]],
-                "PolicyDocument": p,
-            }
-        }
-
 
 class Topic(Translator):
 
@@ -597,19 +681,6 @@ class Topic(Translator):
     id = "TopicArn"
     strip = ("policy", "owner")
     rename = {"name": "TopicName"}
-
-    def get_sub_resources(self, tfr):
-        p = tfr["values"].get("policy")
-        if not p:
-            return
-        return {
-            "%sPolicy"
-            % self._camel_str(tfr["name"]): {
-                "Type": "AWS::SNS::TopicPolicy",
-                "Topics": [tfr["values"]["arn"]],
-                "PolicyDocument": p,
-            }
-        }
 
     def get_identity(self, r):
         return {self.id: r["values"]["arn"]}
@@ -651,10 +722,10 @@ class Lambda(Translator):
 
 class StateMachine(Translator):
 
-    # tf_type = "sfn_state_machine"
+    tf_type = "sfn_state_machine"
     id = "Arn"
     strip = (
-        # "definition",
+        "definition",
         "creation_date",
         "status",
         "logging_configuration",
@@ -668,6 +739,25 @@ class StateMachine(Translator):
 
     def get_identity(self, r):
         return {self.id: r["values"]["arn"]}
+
+    def get_properties(self, tf):
+        cfr = super().get_properties(tf)
+        if self.config["s3_path"]:
+            kinfo = write_s3_key(
+                self.config["s3"],
+                self.config["s3_path"],
+                "%s.json" % tf["name"],
+                tf["values"]["definition"],
+            )
+            cfr["DefinitionS3Location"] = loc = {
+                "Bucket": kinfo["Bucket"],
+                "Key": kinfo["Key"],
+            }
+            if kinfo.get("Version"):
+                loc["Version"] = kinfo["Version"]
+        else:
+            cfr["Definition"] = json.loads(tf["values"]["definition"])
+        return cfr
 
 
 class DynamodbTable(Translator):
