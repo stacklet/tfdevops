@@ -1,4 +1,6 @@
 import boto3
+from botocore.exceptions import ClientError
+from botocore.waiter import WaiterModel, create_waiter_with_client
 import click
 import json
 import jsonschema
@@ -8,14 +10,169 @@ from pathlib import Path
 import subprocess
 import hcl2
 
-
 log = logging.getLogger("tfdevops")
+
+
+ChangeSetExecWaiter = {
+    "version": 2,
+    "waiters": {
+        "ChangeSetExecuteComplete": {
+            "operation": "DescribeChangeSet",
+            "delay": 10,
+            "maxAttempts": 40,
+            "acceptors": [
+                {
+                    "expected": "EXECUTE_FAILED",
+                    "matcher": "path",
+                    "state": "failure",
+                    "argument": "ExecutionStatus",
+                },
+                {
+                    "expected": "EXECUTE_COMPLETE",
+                    "matcher": "path",
+                    "argument": "ExecutionStatus",
+                    "state": "success",
+                },
+            ],
+        }
+    },
+}
 
 
 @click.group()
 def cli():
     """Terraform to AWS DevOps Guru"""
     logging.basicConfig(level=logging.INFO)
+
+
+@cli.command()
+@click.option("-t", "--template", type=click.File("r"))
+@click.option("-r", "--resources", type=click.File("r"))
+@click.option("-s", "--stack-name", default="GuruStack")
+def deploy(template, resources, stack_name):
+    stack_content = json.load(template)
+    import_resources = json.load(resources)
+    client = boto3.client("cloudformation")
+
+    log.info("Checking stack state")
+    try:
+        stack_info = client.describe_stacks(StackName=stack_name)[0]
+    except ClientError:
+        # somewhat bonkers the service team hasn't put a proper customized exception in place for a common error issue.
+        # ala they have one for client.exceptions.StackNotFoundException but didn't bother
+        # to actually use it for this, or its histerical raison compatibility.
+        # botocore.exceptions.ClientError: An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id GuruStack does not exist
+        stack_info = None
+
+    # so for each stack and each resource we have to deal with the complexity
+    # of cfn's underlying state workflow for each, as outline by the state
+    # machine complexity. This is a great example
+    # of why terraform represent's sanity, as well why customer feedback driven
+    # product development leading to a worse experience for customers.
+    # It also leads to brittleness and complexity for any tool building on
+    # cloudformation, exhibit A being the unusability of stacksets in the
+    # real world.
+    # Its gets worse when you consider the compatibility complexity matrix
+    # on the various versions and bugs.
+
+    # CREATE_COMPLETE
+    # CREATE_FAILED
+    # CREATE_IN_PROGRESS
+    # DELETE_COMPLETE
+    # DELETE_FAILED
+    # DELETE_IN_PROGRESS
+    # IMPORT_COMPLETE
+    # IMPORT_IN_PROGRESS
+    # IMPORT_ROLLBACK_COMPLETE
+    # IMPORT_ROLLBACK_FAILED
+    # IMPORT_ROLLBACK_IN_PROGRESS
+    # REVIEW_IN_PROGRESS
+    # ROLLBACK_COMPLETE
+    # ROLLBACK_FAILED
+    # ROLLBACK_IN_PROGRESS
+    # UPDATE_COMPLETE
+    # UPDATE_COMPLETE_CLEANUP_IN_PROGRESS
+    # UPDATE_IN_PROGRESS
+    # UPDATE_ROLLBACK_COMPLETE
+    # UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS
+    # UPDATE_ROLLBACK_FAILED
+    # UPDATE_ROLLBACK_IN_PROGRESS
+
+    if stack_info and stack_info["StackStatus"] == "ROLLBACK_COMPLETE":
+        log.info("Deleting failed stack")
+        client.delete_stack(StackName=stack_name)
+        waiter = client.get_waiter("stack_delete_complete")
+        waiter.wait(StackName=stack_name)
+        stack_info = None
+    elif stack_info and stack_info["StackStatus"].endswith("IN_PROGRESS"):
+        log.info(
+            "Cloudformation stack undergoing change %s, please try again later",
+            stack_info["StackStatus"],
+        )
+        return
+    elif stack_info and stack_info["StackStatus"] == "DELETE_COMPLETE":
+        stack_info = None
+    elif stack_info:
+        stack_resources = {
+            sr["LogicalResourceId"]
+            for sr in client.describe_stack_resources(StackName=stack_name).get(
+                "StackResources", []
+            )
+        }
+        import_resources = [
+            i for i in import_resources if i["LogicalResourceId"] not in stack_resources
+        ]
+        if not import_resources:
+            log.info("All resources have already been imported")
+            return
+
+    log.info(
+        "Creating import change set, %d resources to import", len(import_resources)
+    )
+    # returns ids which are mostly useless, because we have to use unique at moment names
+    client.create_change_set(
+        StackName=stack_name,
+        ChangeSetType="IMPORT",
+        TemplateBody=json.dumps(stack_content),
+        Capabilities=["CAPABILITY_NAMED_IAM"],
+        ChangeSetName="GuruImport",
+        ResourcesToImport=import_resources,
+    )
+
+    # Change Set States
+    # CREATE_COMPLETE
+    # CREATE_IN_PROGRESS
+    # CREATE_PENDING
+    # DELETE_COMPLETE
+    # DELETE_FAILED
+    # DELETE_IN_PROGRESS
+    # DELETE_PENDING
+    # FAILED
+
+    waiter = client.get_waiter("change_set_create_complete")
+    waiter.wait(
+        StackName=stack_name,
+        ChangeSetName="GuruImport",
+        WaiterConfig={"Delay": 10, "MaxAtempts": 60},
+    )
+
+    client.execute_change_set(ChangeSetName="GuruImport", StackName=stack_name)
+
+    # Aha changesets have another state workflow representing execution progress
+    # AVAILABLE
+    # EXECUTE_COMPLETE
+    # EXECUTE_FAILED
+    # EXECUTE_IN_PROGRESS
+    # OBSOLETE
+    # UNAVAILABLE
+    waiter = create_waiter_with_client(
+        "ChangeSetExecuteComplete", WaiterModel(ChangeSetExecWaiter), client
+    )
+    waiter.wait(
+        StackName=stack_name,
+        ChangeSetName="GuruImport",
+        WaiterConfig={"Delay": 10, "MaxAttempts": 60},
+    )
 
 
 @cli.command()
@@ -59,16 +216,27 @@ def validate(template):
 
 
 @cli.command()
-@click.option("-d", "--module", required=True)
-@click.option("-o", "--output", type=click.File("w"), default="-")
-@click.option("-r", "--resources", type=click.File("w"))
-@click.option("-t", "--types", multiple=True)
-def cfn(module, output, resources, types):
+@click.option("-d", "--module", required=True, help="Terraform root module directory")
+@click.option(
+    "-t",
+    "--template",
+    type=click.File("w"),
+    default="-",
+    help="Cloudformation template output path",
+)
+@click.option(
+    "-r",
+    "--resources",
+    type=click.File("w"),
+    help="Output file for resources to import",
+)
+@click.option("--types", multiple=True, help="Only consider these terraform types")
+def cfn(module, template, resources, types):
     """Export a cloudformation template"""
     state = get_state_resources(module)
     type_map = get_type_mapping()
 
-    template = {
+    ctemplate = {
         "AWSTemplateFormatVersion": "2010-09-09",
         "Description": "TF to CFN Guru Meditation Ops",
         "Resources": {},
@@ -93,13 +261,13 @@ def cfn(module, output, resources, types):
 
         for r in v:
             rname = translator.get_name(r)
-            if rname in template["Resources"]:
+            if rname in ctemplate["Resources"]:
                 log.warning("resource override %s" % rname)
                 rname = "%s%s" % (rname, cfn_type.split("::")[-1])
             props = translator.get_properties(r)
             if props is None:
                 continue
-            template["Resources"][rname] = {
+            ctemplate["Resources"][rname] = {
                 "Type": cfn_type,
                 "DeletionPolicy": "Retain",
                 "Properties": props,
@@ -113,7 +281,7 @@ def cfn(module, output, resources, types):
                     }
                 )
 
-    output.write(json.dumps(template))
+    template.write(json.dumps(ctemplate))
 
     if resources:
         resources.write(json.dumps(ids, indent=2))
@@ -233,7 +401,7 @@ class EventRuleTranslator(Translator):
 
 class DbInstance(Translator):
 
-    tf_type = "db_instance"
+    # tf_type = "db_instance"
     id = "DBInstanceIdentifier"
     strip = (
         "hosted_zone_id",
@@ -266,6 +434,7 @@ class DbInstance(Translator):
     def get_properties(self, tf):
         cfr = super().get_properties(tf)
         cfr["Port"] = str(cfr["Port"])
+        return cfr
 
 
 class EcsService(Translator):
