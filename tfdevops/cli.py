@@ -371,15 +371,23 @@ def validate(template):
     "--s3-path",
     help="S3 Bucket and Prefix (s3://bucket/pre/fix) for oversized templates and resources",
 )
+@click.option(
+    "--state-file", help="Terraform state file - output of terraform show -json",
+)
 @click.option("--types", multiple=True, help="Only consider these terraform types")
-def cfn(module, template, resources, types, s3_path):
+def cfn(module, template, resources, types, s3_path, state_file):
     """Export a cloudformation template and importable resources
 
     s3 path only needs to be specified when handling resources with verbose
     definitions (step functions) or a large cardinality of resources which would
     overflow cloudformation's api limits on templates (50k).
     """
-    state = get_state_resources(module)
+    if module:
+        state = get_state_resources(module)
+    elif state_file:
+        state = json.load(open(state_file))
+    else:
+        raise SyntaxError("either --module or --state-file needs to be passed")
     type_map = TF_CFN_MAP
 
     ctemplate = {
