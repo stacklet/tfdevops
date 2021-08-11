@@ -4,7 +4,6 @@
 import json
 import logging
 import subprocess
-from pathlib import Path
 from urllib import parse
 
 import boto3
@@ -381,7 +380,7 @@ def cfn(module, template, resources, types, s3_path):
     overflow cloudformation's api limits on templates (50k).
     """
     state = get_state_resources(module)
-    type_map = get_type_mapping()
+    type_map = TF_CFN_MAP
 
     ctemplate = {
         "AWSTemplateFormatVersion": "2010-09-09",
@@ -451,11 +450,6 @@ def cfn(module, template, resources, types, s3_path):
 
     if resources:
         resources.write(json.dumps(ids, indent=2))
-
-
-def get_type_mapping():
-    with open(Path(__file__).parent / "type_map.json") as fh:
-        return json.load(fh)
 
 
 def get_state_resources(tf_dir):

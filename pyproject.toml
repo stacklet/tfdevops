@@ -10,7 +10,6 @@ tfdevops = 'tfdevops.cli:cli'
 
 [tool.poetry.dependencies]
 python = "^3.8"
-python-hcl2 = "^3.0.1"
 boto3 = "^1.18.16"
 click = "^8.0.1"
 jmespath = "^0.10.0"
@@ -18,7 +17,6 @@ jsonschema = "^3.2.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.2.4"
-moto = "^2.2.1"
 black = "^21.7b0"
 
 [build-system]
