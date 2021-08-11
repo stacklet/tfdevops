@@ -1,4 +1,4 @@
-from tfdevops.cli import Translator, TF_CFN_MAP
+from tfdevops.cli import TF_CFN_MAP, Translator
 
 
 def test_translator_map():
