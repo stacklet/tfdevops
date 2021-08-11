@@ -1,16 +1,18 @@
-import boto3
-from botocore.exceptions import ClientError, WaiterError
-from botocore.waiter import WaiterModel, create_waiter_with_client
-import click
+# Copyright Stacklet, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
 import json
-import jsonschema
-import jmespath
-import hcl2
 import logging
-from pathlib import Path
 import subprocess
+from pathlib import Path
 from urllib import parse
 
+import boto3
+import click
+import jmespath
+import jsonschema
+from botocore.exceptions import ClientError, WaiterError
+from botocore.waiter import WaiterModel, create_waiter_with_client
 
 __author__ = "Kapil Thangavelu <https://twitter.com/kapilvt>"
 
@@ -18,6 +20,7 @@ log = logging.getLogger("tfdevops")
 
 DEFAULT_STACK_NAME = "GuruStack"
 DEFAULT_CHANGESET_NAME = "GuruImport"
+DEFAULT_S3_ENCRYPT = "AES256"
 
 # manually construct waiter models for change sets since the service
 # team didn't bother to publish one in their smithy models, perhaps
@@ -70,9 +73,10 @@ ChangeSetWaiters = {
 
 
 @click.group()
-def cli():
+@click.option("-v", "--verbose", is_flag=True)
+def cli(verbose):
     """Terraform to Cloudformation and AWS DevOps Guru"""
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=verbose and logging.DEBUG or logging.INFO)
 
 
 @cli.command()
@@ -102,10 +106,14 @@ def deploy(template, resources, stack_name, guru, template_url, change_name):
         stack_info = client.describe_stacks(StackName=stack_name)["Stacks"][0]
         log.info("Found existing stack, state:%s", stack_info["StackStatus"])
     except ClientError:
-        # somewhat bonkers the service team hasn't put a proper customized exception in place for a common error issue.
-        # ala they have one for client.exceptions.StackNotFoundException but didn't bother
+        # somewhat annoying the service team hasn't put a proper customized
+        # exception in place for a common error issue. ala they have one for
+        # client.exceptions.StackNotFoundException but didn't bother
         # to actually use it for this, or its histerical raison compatibility.
-        # botocore.exceptions.ClientError: An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id GuruStack does not exist
+        # This unfortunately means we have to catch a very generic client error.
+        # ie. we're trying to catch errors like this.
+        #  botocore.exceptions.ClientError: An error occurred (ValidationError) when
+        #  calling the DescribeStacks operation: Stack with id GuruStack does not exist
         stack_info = None
 
     # so for each stack and each resource we have to deal with the complexity
@@ -123,7 +131,7 @@ def deploy(template, resources, stack_name, guru, template_url, change_name):
     # Its gets worse when you consider the compatibility complexity matrix
     # on the various versions and bugs, like the lack of a proper error code
     # for stack not found above.
-    # Nonetheless, we perserve and try to present a humane interface.
+    # Nonetheless, we persevere and try to present a humane interface.
     #
     # Stack State Enumeration:
     # CREATE_COMPLETE
@@ -184,7 +192,7 @@ def deploy(template, resources, stack_name, guru, template_url, change_name):
         cinfo = client.describe_change_set(
             StackName=stack_name, ChangeSetName=change_name
         )
-    except client.exceptions.ChangeSetNotFoundException:
+    except (client.exceptions.ChangeSetNotFoundException, ClientError):
         cinfo = None
 
     if cinfo and cinfo["Status"] == "FAILED":
@@ -368,8 +376,9 @@ def validate(template):
 def cfn(module, template, resources, types, s3_path):
     """Export a cloudformation template and importable resources
 
-    s3 path only needs to be specified when handling resources with verbose definitions (step functions)
-    or a large cardinality of resources which would overflow cloudformation's api limits on templates (50k).
+    s3 path only needs to be specified when handling resources with verbose
+    definitions (step functions) or a large cardinality of resources which would
+    overflow cloudformation's api limits on templates (50k).
     """
     state = get_state_resources(module)
     type_map = get_type_mapping()
@@ -421,9 +430,9 @@ def cfn(module, template, resources, types, s3_path):
                 )
 
     # overflow to s3 for actual deployment on large templates
-    serialized_template = json.dumps(ctemplate).encode('utf8')
+    serialized_template = json.dumps(ctemplate).encode("utf8")
 
-    if s3_path: # and len(serialized_template) > 49000:
+    if s3_path:  # and len(serialized_template) > 49000:
         s3_url = format_template_url(
             s3_client,
             format_s3_path(
@@ -434,7 +443,9 @@ def cfn(module, template, resources, types, s3_path):
         )
         log.info("wrote s3 template url: %s", s3_url)
     elif len(serialized_template) > 49000:
-        log.warning("template too large for local deploy, pass --s3-path to deploy from s3")
+        log.warning(
+            "template too large for local deploy, pass --s3-path to deploy from s3"
+        )
 
     template.write(json.dumps(ctemplate, indent=2))
 
@@ -480,8 +491,9 @@ def write_s3_key(client, s3_path, key, content):
     result = client.put_object(
         Bucket=kinfo["Bucket"],
         Key=kinfo["Key"],
+        # this is the default but i've seen some orgs try to force this via request policy checks
         ACL="private",
-        ServerSideEncryption="AES256",
+        ServerSideEncryption=DEFAULT_S3_ENCRYPT,
         Body=content,
     )
     if result.get("VersionId"):
@@ -499,7 +511,7 @@ def format_s3_path(kinfo):
 def format_template_url(client, s3_path):
     parsed = parse.urlparse(s3_path)
     bucket = parsed.netloc
-    key = parsed.path.strip('/')
+    key = parsed.path.strip("/")
     version_id = None
     if parsed.query:
         query = parse.parse_qs(parsed.query)
@@ -512,6 +524,19 @@ def format_template_url(client, s3_path):
     if version_id:
         url += "?versionId={version_id}"
     return url.format(bucket=bucket, key=key, version_id=version_id, region=region)
+
+
+TF_CFN_MAP = {
+    "cloudwatch_event_rule": "AWS::Events::Rule",
+    "db_instance": "AWS::RDS::DBInstance",
+    "sns_topic": "AWS::SNS::Topic",
+    "sqs_queue": "AWS::SQS::Queue",
+    "lambda_function": "AWS::Lambda::Function",
+    "sfn_state_machine": "AWS::StepFunctions::StateMachine",
+    "cloudwatch_event_rule": "AWS::Events::Rule",
+    "ecs_service": "AWS::ECS::Service",
+    "dynamodb_table": "AWS::DynamoDB::Table",
+}
 
 
 class Translator:
@@ -819,18 +844,4 @@ class DynamodbTable(Translator):
 
 
 if __name__ == "__main__":
-    try:
-        cli()
-    except WaiterError as e:
-        log.warning(
-            "failed waiting for async operation error\n reason: %s\n response: %s"
-            % (e, e.last_response)
-        )
-        raise
-    except SystemExit:
-        raise
-    except Exception:
-        import traceback, pdb, sys
-
-        traceback.print_exc()
-        pdb.post_mortem(sys.exc_info()[-1])
+    cli()

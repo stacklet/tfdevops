@@ -1,23 +1,21 @@
 # tfdevops
 
-Terraform support for AWS DevOps Guru.
+Terraform support for AWS DevOps Guru. The service natively only supports Cloudformation stacks.
 https://aws.amazon.com/devops-guru/features/
 
+This project provides support for terraform users by automatically
+converting terraform state to an imported cloudformation stack
+and optionally enabling it with devops guru.
 
-Unfortunately the DevOps Guru service team only supports app level stack enablement via cloudformation, meaning its useless
-to the majority of AWS users.
-
-This project provides support for terraform centric organizations to use it by automatically
-converting terraform state to an imported cloudformation stack and optionally enabling it with devops guru.
-
-Note it only supports roughly 25 resources per the pricing page.
+Note AWS DevOps Guru only supports roughly 25 resources.
 https://aws.amazon.com/devops-guru/pricing/
 
 
-tfdevops also corrects a major usability issue of cloudformation, by providing client side schema validation
-of templates.
+## How it works
 
-Enjoy.
+- Translates terraform state into a cloudformation template with a retain deletion policy
+- Creates a cloudformation stack with imported resources
+- Enrolls the stack into AWS DevOps Guru
 
 ## Usage
 
@@ -69,3 +67,17 @@ path.
 1. Is this a generic terraform to cloudformation converter?
 
 No, while it has some facilities that resemble that, its very targeted at simply producing enough cfn to make devops guru work.
+
+## Supported resources
+
+
+At the moment tfdevops supports the following resources
+
+ - AWS::StepFunctions::StateMachine
+ - AWS::ECS::Service
+ - AWS::SQS::Queue
+ - AWS::SNS::Topic
+ - AWS::RDS::DBInstance
+ - AWS::Lambda::Function
+ - AWS::Events::Rule
+ - AWS::DynamoDB::Table
