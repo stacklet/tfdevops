@@ -3,6 +3,7 @@
 #
 import json
 import logging
+import os
 import subprocess
 from urllib import parse
 
@@ -19,7 +20,7 @@ log = logging.getLogger("tfdevops")
 
 DEFAULT_STACK_NAME = "GuruStack"
 DEFAULT_CHANGESET_NAME = "GuruImport"
-DEFAULT_S3_ENCRYPT = "AES256"
+DEFAULT_S3_ENCRYPT = os.environ.get("TFDEVOPS_S3_ENCRYPT", "AES256")
 
 # manually construct waiter models for change sets since the service
 # team didn't bother to publish one in their smithy models, perhaps
@@ -76,6 +77,9 @@ ChangeSetWaiters = {
 def cli(verbose):
     """Terraform to Cloudformation and AWS DevOps Guru"""
     logging.basicConfig(level=verbose and logging.DEBUG or logging.INFO)
+    if verbose:
+        logging.getLogger("botocore").setLevel(logging.INFO)
+        logging.getLogger("urllib3").setLevel(logging.INFO)
 
 
 @cli.command()
@@ -130,6 +134,7 @@ def deploy(template, resources, stack_name, guru, template_url, change_name):
     # Its gets worse when you consider the compatibility complexity matrix
     # on the various versions and bugs, like the lack of a proper error code
     # for stack not found above.
+    #
     # Nonetheless, we persevere and try to present a humane interface.
     #
     # Stack State Enumeration:
@@ -298,7 +303,7 @@ def deploy(template, resources, stack_name, guru, template_url, change_name):
     # but now we have to wait for the stack status to reflect back on steady state
     waiter = client.get_waiter("stack_import_complete")
     log.info("Waiting for import to complete")
-    waiter.wait(StackName=stack_name, WaiterConfig={"Delay": 10, "MaxAttempts": 60})
+    waiter.wait(StackName=stack_name, WaiterConfig={"Delay": 15, "MaxAttempts": 100})
 
     log.info("Cloudformation Stack Deployed - Terraform resources imported")
     if guru:
@@ -353,7 +358,7 @@ def validate(template):
 
 
 @cli.command()
-@click.option("-d", "--module", required=True, help="Terraform root module directory")
+@click.option("-d", "--module", help="Terraform root module directory")
 @click.option(
     "-t",
     "--template",
@@ -371,15 +376,18 @@ def validate(template):
     "--s3-path",
     help="S3 Bucket and Prefix (s3://bucket/pre/fix) for oversized templates and resources",
 )
+@click.option(
+    "--state-file", help="Terraform state file - output of terraform show -json",
+)
 @click.option("--types", multiple=True, help="Only consider these terraform types")
-def cfn(module, template, resources, types, s3_path):
+def cfn(module, template, resources, types, s3_path, state_file):
     """Export a cloudformation template and importable resources
 
     s3 path only needs to be specified when handling resources with verbose
     definitions (step functions) or a large cardinality of resources which would
     overflow cloudformation's api limits on templates (50k).
     """
-    state = get_state_resources(module)
+    state = get_state_resources(module, state_file)
     type_map = TF_CFN_MAP
 
     ctemplate = {
@@ -409,7 +417,7 @@ def cfn(module, template, resources, types, s3_path):
         for r in v:
             rname = translator.get_name(r)
             if rname in ctemplate["Resources"]:
-                log.warning("resource override %s" % rname)
+                log.debug("resource override %s" % rname)
                 rname = "%s%s" % (rname, cfn_type.split("::")[-1])
             props = translator.get_properties(r)
             if props is None:
@@ -452,9 +460,15 @@ def cfn(module, template, resources, types, s3_path):
         resources.write(json.dumps(ids, indent=2))
 
 
-def get_state_resources(tf_dir):
-    output = subprocess.check_output(["terraform", "show", "-json"], cwd=tf_dir)
-    state = json.loads(output)
+def get_state_resources(tf_dir, tf_state):
+    if tf_dir:
+        output = subprocess.check_output(["terraform", "show", "-json"], cwd=tf_dir)
+        state = json.loads(output)
+    elif tf_state:
+        state = json.load(open(tf_state))
+    else:
+        raise SyntaxError("either --module or --state-file needs to be passed")
+
     state_resources = {}
 
     resources = jmespath.search("values.root_module.resources", state) or []
@@ -634,6 +648,9 @@ class DbInstance(Translator):
         "status",
         "latest_restorable_time",
         "endpoint",
+        "performance_insights_kms_key_id",  # tf allows key set when insights false
+        "monitoring_interval",  # tf allows 0 value cfn does not
+        "monitoring_role_arn",
     )
     rename = {
         "username": "MasterUsername",
@@ -709,7 +726,7 @@ class Lambda(Translator):
 
     tf_type = "lambda_function"
     id = "FunctionName"
-    flatten = ("environment", "tracing_config")
+    flatten = ("environment", "tracing_config", "vpc_config")
     strip = (
         "version",
         "policy",
@@ -719,6 +736,7 @@ class Lambda(Translator):
         "filename",
         "invoke_arn",
         "last_modified",
+        "timeouts",
     )
 
     def get_identity(self, r):
@@ -736,6 +754,8 @@ class Lambda(Translator):
         cfr["Tags"] = [
             {"Key": k, "Value": v} for k, v in tfr["values"].get("Tags", {}).items()
         ]
+        if "VpcConfig" in cfr:
+            cfr["VpcConfig"].pop("VpcId")
         return cfr
 
 
@@ -794,6 +814,7 @@ class DynamodbTable(Translator):
         "stream_arn",
         "stream_label",
         "attribute",
+        "timeouts",
     )
 
     def get_properties(self, tf):
