@@ -201,7 +201,7 @@ def deploy(template, resources, stack_name, guru, template_url, change_name):
 
     if cinfo and cinfo["Status"] == "FAILED":
         log.warning(
-            f"Previous change set failed with reason %s", cinfo.get("StatusReason", "")
+            "Previous change set failed with reason %s", cinfo.get("StatusReason", "")
         )
         client.delete_change_set(StackName=stack_name, ChangeSetName=change_name)
         waiter = create_waiter_with_client(
@@ -377,7 +377,8 @@ def validate(template):
     help="S3 Bucket and Prefix (s3://bucket/pre/fix) for oversized templates and resources",
 )
 @click.option(
-    "--state-file", help="Terraform state file - output of terraform show -json",
+    "--state-file",
+    help="Terraform state file - output of terraform show -json",
 )
 @click.option("--types", multiple=True, help="Only consider these terraform types")
 def cfn(module, template, resources, types, s3_path, state_file):
@@ -651,6 +652,8 @@ class DbInstance(Translator):
         "performance_insights_kms_key_id",  # tf allows key set when insights false
         "monitoring_interval",  # tf allows 0 value cfn does not
         "monitoring_role_arn",
+        "timeouts",
+        "engine_version_actual",
     )
     rename = {
         "username": "MasterUsername",
@@ -662,6 +665,7 @@ class DbInstance(Translator):
         "vpc_security_group_ids": "VPCSecurityGroups",
         "db_subnet_group_name": "DBSubnetGroupName",
         "parameter_group_name": "DBParameterGroupName",
+        "iam_database_authentication_enabled": "EnableIAMDatabaseAuthentication",
     }
 
     def get_identity(self, r):
@@ -688,6 +692,18 @@ class EcsService(Translator):
         "deployment_minimum_healthy_percent",
     )
 
+    def get_identity(self, r):
+        return {"ServiceArn": r["values"]["id"], "Cluster": r["values"]["cluster"]}
+
+    def get_properties(self, tf):
+        cfr = super().get_properties(tf)
+        network = cfr.pop("NetworkConfiguration")
+        network["AssignPublicIp"] = (
+            network.pop("AssignPublicIp") is True and "ENABLED" or "DISABLED"
+        )
+        cfr["NetworkConfiguration"] = {"AwsvpcConfiguration": network}
+        return cfr
+
 
 class Sqs(Translator):
 
@@ -699,6 +715,7 @@ class Sqs(Translator):
         "name": "QueueName",
         "message_retention_seconds": "MessageRetentionPeriod",
         "visibility_timeout_seconds": "VisibilityTimeout",
+        "receive_wait_time_seconds": "ReceiveMessageWaitTimeSeconds",
     }
 
     def get_identity(self, r):
