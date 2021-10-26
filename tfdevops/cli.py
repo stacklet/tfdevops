@@ -377,8 +377,7 @@ def validate(template):
     help="S3 Bucket and Prefix (s3://bucket/pre/fix) for oversized templates and resources",
 )
 @click.option(
-    "--state-file",
-    help="Terraform state file - output of terraform show -json",
+    "--state-file", help="Terraform state file - output of terraform show -json",
 )
 @click.option("--types", multiple=True, help="Only consider these terraform types")
 def cfn(module, template, resources, types, s3_path, state_file):
