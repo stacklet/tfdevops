@@ -316,7 +316,7 @@ def deploy(template, resources, stack_name, guru, template_url, change_name):
 
 
 @cli.command()
-@click.option("-t", "--template", type=click.File("r"))
+@click.option("-t", "--template", type=click.File("r"), required=True)
 def validate(template):
     """validate resources in a template per their jsonschema def"""
     data = json.load(template)
@@ -808,7 +808,7 @@ class Elbv2(Translator):
 
     tf_type = "lb"
     cfn_type = "AWS::ElasticLoadBalancingV2::LoadBalancer"
-    id = "id"
+    id = "LoadBalancerArn"
     rename = {"subnet_mapping": "SubnetMappings", "load_balancer_type": "Type"}
     strip = ("dns_name", "arn_suffix", "access_logs", "vpc_id", "zone_id")
 
@@ -816,6 +816,9 @@ class Elbv2(Translator):
         "IdleTimeout": "idle_timeout.timeout_seconds",
         "EnableHttp2": "routing.http2.enabled",
     }
+
+    def get_identity(self, r):
+        return {self.id: r['values']['id']}
 
     def get_properties(self, tfr):
         cfr = super().get_properties(tfr)
