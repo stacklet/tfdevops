@@ -823,7 +823,15 @@ class Elbv2(Translator):
             cv = cfr.pop(k)
             if cv is None:
                 continue
-            cfr.setdefault("LoadBalancerAttributes", {})[v] = cv and "true" or "false"
+            cfr.setdefault("LoadBalancerAttributes", []).append(
+                {'Key': v,
+                 'Value': cv and "true" or "false"})
+
+        subs = []
+        for sub in cfr.get('SubnetMappings', ()):
+            sub = self.filter_empty(sub)
+            subs.append(self.camel(sub))
+        cfr['SubnetMappings'] = subs
         return cfr
 
 
