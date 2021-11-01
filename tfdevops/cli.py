@@ -422,6 +422,7 @@ def cfn(module, template, resources, types, s3_path, state_file):
             props = translator.get_properties(r)
             if props is None:
                 continue
+            props = filter_empty(props)
             ctemplate["Resources"][rname] = {
                 "Type": cfn_type,
                 "DeletionPolicy": "Retain",
@@ -682,11 +683,14 @@ class EcsService(Translator):
     tf_type = "ecs_service"
     id = "ServiceName"
     flatten = ("network_configuration", "deployment_controller")
-    rename = {"iam_role": "Role", "enable_ecs_managed_tags": "EnableECSManagedTags"}
+    rename = {
+        "iam_role": "Role",
+        "enable_ecs_managed_tags": "EnableECSManagedTags",
+        "cluster": "Cluster",
+    }
     strip = (
         "deployment_circuit_breaker",
         "propagate_tags",
-        "cluster",
         "deployment_maximum_percent",
         "deployment_minimum_healthy_percent",
     )
@@ -872,6 +876,20 @@ class DynamodbTable(Translator):
                 "KMSMasterKeyId": sse["kms_key_arn"],
             }
         return cfr
+
+
+def filter_empty(d):
+    if isinstance(d, list):
+        for v in list(d):
+            if isinstance(v, dict):
+                filter_empty(v)
+    elif isinstance(d, dict):
+        for k, v in list(d.items()):
+            if not v:
+                del d[k]
+            elif isinstance(v, (dict, list)):
+                filter_empty(v)
+    return d
 
 
 if __name__ == "__main__":
