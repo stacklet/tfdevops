@@ -818,7 +818,7 @@ class Elbv2(Translator):
     }
 
     def get_identity(self, r):
-        return {self.id: r['values']['id']}
+        return {self.id: r["values"]["id"]}
 
     def get_properties(self, tfr):
         cfr = super().get_properties(tfr)
