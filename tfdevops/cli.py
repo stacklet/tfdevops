@@ -388,7 +388,6 @@ def cfn(module, template, resources, types, s3_path, state_file):
     overflow cloudformation's api limits on templates (50k).
     """
     state = get_state_resources(module, state_file)
-    type_map = TF_CFN_MAP
 
     ctemplate = {
         "AWSTemplateFormatVersion": "2010-09-09",
@@ -403,11 +402,12 @@ def cfn(module, template, resources, types, s3_path, state_file):
         provider, k = k.split("_", 1)
         if types and k not in types:
             continue
-        if k not in type_map:
+        if k not in translators:
             log.debug("no cfn type for tf %s" % k)
             continue
-        cfn_type = type_map[k]
+
         translator_class = translators.get(k)
+        cfn_type = translator_class.cfn_type
         if not translator_class:
             log.debug("no translator for %s" % k)
             continue
@@ -534,19 +534,6 @@ def format_template_url(client, s3_path):
     return url.format(bucket=bucket, key=key, version_id=version_id, region=region)
 
 
-TF_CFN_MAP = {
-    "cloudwatch_event_rule": "AWS::Events::Rule",
-    "db_instance": "AWS::RDS::DBInstance",
-    "sns_topic": "AWS::SNS::Topic",
-    "sqs_queue": "AWS::SQS::Queue",
-    "lambda_function": "AWS::Lambda::Function",
-    "sfn_state_machine": "AWS::StepFunctions::StateMachine",
-    "cloudwatch_event_rule": "AWS::Events::Rule",
-    "ecs_service": "AWS::ECS::Service",
-    "dynamodb_table": "AWS::DynamoDB::Table",
-}
-
-
 class Translator:
 
     id = None
@@ -555,8 +542,12 @@ class Translator:
     rename = {}
     flatten = ()
 
-    def __init__(self, config):
+    def __init__(self, config=None):
         self.config = config
+
+    @classmethod
+    def get_translator(cls, tf_type):
+        return cls.get_translator_map()[tf_type]
 
     @classmethod
     def get_translator_map(cls):
@@ -620,6 +611,8 @@ class Translator:
 class EventRuleTranslator(Translator):
 
     tf_type = "cloudwatch_event_rule"
+    cfn_type = "AWS::Events::Rule"
+
     id = "Name"
 
     def get_properties(self, r):
@@ -635,6 +628,7 @@ class EventRuleTranslator(Translator):
 class DbInstance(Translator):
 
     tf_type = "db_instance"
+    cfn_type = "AWS::RDS::DBInstance"
     id = "DBInstanceIdentifier"
     strip = (
         "hosted_zone_id",
@@ -677,9 +671,34 @@ class DbInstance(Translator):
         return cfr
 
 
+class ElasticacheReplicationGroup(Translator):
+
+    tf_type = "elasticache_replication_group"
+    cfn_type = "AWS::ElastiCache::ReplicationGroup"
+
+    id = "ReplicationGroupId"
+    rename = {
+        "subnet_group_name": "CacheSubnetGroupName",
+        "maintenance_window": "PreferredMaintenanceWindow",
+        "number_cache_clusters": "NumCacheClusters",
+        "node_type": "CacheNodeType",
+        "parameter_group_name": "CacheParameterGroupName",
+    }
+    strip = (
+        "primary_endpoint_address",
+        "reader_endpoint_address",
+        "member_clusters",
+        "engine_version_actual",
+        "apply_immediately",
+        "cluster_mode",
+    )
+
+
 class EcsService(Translator):
 
     tf_type = "ecs_service"
+    cfn_type = "AWS::ECS::Service"
+
     id = "ServiceName"
     flatten = ("network_configuration", "deployment_controller")
     rename = {"iam_role": "Role", "enable_ecs_managed_tags": "EnableECSManagedTags"}
@@ -707,6 +726,8 @@ class EcsService(Translator):
 class Sqs(Translator):
 
     tf_type = "sqs_queue"
+    cfn_type = "AWS::SQS::Queue"
+
     id = "QueueUrl"
     strip = ("url", "policy", "fifo_throughput_limit", "deduplication_scope")
     rename = {
@@ -730,6 +751,8 @@ class Sqs(Translator):
 class Topic(Translator):
 
     tf_type = "sns_topic"
+    cfn_type = "AWS::SNS::Topic"
+
     id = "TopicArn"
     strip = ("policy", "owner")
     rename = {"name": "TopicName"}
@@ -741,6 +764,8 @@ class Topic(Translator):
 class Lambda(Translator):
 
     tf_type = "lambda_function"
+    cfn_type = "AWS::Lambda::Function"
+
     id = "FunctionName"
     flatten = ("environment", "tracing_config", "vpc_config")
     strip = (
@@ -778,6 +803,8 @@ class Lambda(Translator):
 class StateMachine(Translator):
 
     tf_type = "sfn_state_machine"
+    cfn_type = "AWS::StepFunctions::StateMachine"
+
     id = "Arn"
     strip = (
         "definition",
@@ -818,6 +845,8 @@ class StateMachine(Translator):
 class DynamodbTable(Translator):
 
     tf_type = "dynamodb_table"
+    cfn_type = "AWS::DynamoDB::Table"
+
     id = "TableName"
     rename = {"name": "TableName"}
     strip = (

@@ -1,0 +1,85 @@
+                {
+                    "address": "aws_elasticache_replication_group.buffer",
+                    "mode": "managed",
+                    "type": "aws_elasticache_replication_group",
+                    "name": "buffer",
+                    "provider_name": "registry.terraform.io/hashicorp/aws",
+                    "schema_version": 1,
+                    "values": {
+                        "apply_immediately": true,
+                        "arn": "arn:aws:elasticache:us-east-2:112233445566:replicationgroup:stack-sample-buffer",
+                        "at_rest_encryption_enabled": true,
+                        "auth_token": "",
+                        "auto_minor_version_upgrade": true,
+                        "automatic_failover_enabled": false,
+                        "availability_zones": null,
+                        "cluster_enabled": false,
+                        "cluster_mode": [
+                            {
+                                "num_node_groups": 1,
+                                "replicas_per_node_group": 0
+                            }
+                        ],
+                        "configuration_endpoint_address": null,
+                        "engine": "redis",
+                        "engine_version": "6.x",
+                        "engine_version_actual": "6.0.5",
+                        "final_snapshot_identifier": null,
+                        "global_replication_group_id": null,
+                        "id": "stack-sample-buffer",
+                        "kms_key_id": "arn:aws:kms:us-east-2:112233445566:key/a33e6586-615d-4214-b2cc-17c3d48d7aea",
+                        "maintenance_window": "mon:06:00-mon:07:00",
+                        "member_clusters": [
+                            "stack-sample-buffer-001"
+                        ],
+                        "multi_az_enabled": false,
+                        "node_type": "cache.m6g.large",
+                        "notification_topic_arn": null,
+                        "number_cache_clusters": 1,
+                        "parameter_group_name": "default.redis6.x",
+                        "port": 6379,
+                        "primary_endpoint_address": "master.stack-sample-buffer.iyyvzj.use2.cache.amazonaws.com",
+                        "reader_endpoint_address": "replica.stack-sample-buffer.iyyvzj.use2.cache.amazonaws.com",
+                        "replication_group_description": "Elasticache cluster with encrypted redis",
+                        "replication_group_id": "stack-sample-buffer",
+                        "security_group_ids": [
+                            "sg-0168ebe76be6927ce"
+                        ],
+                        "security_group_names": [],
+                        "snapshot_arns": null,
+                        "snapshot_name": null,
+                        "snapshot_retention_limit": 0,
+                        "snapshot_window": "02:30-03:30",
+                        "subnet_group_name": "stack-sample-buffer",
+                        "tags": {},
+                        "tags_all": {
+                            "App": "Sample"
+                        },
+                        "timeouts": null,
+                        "transit_encryption_enabled": true
+                    },
+                    "sensitive_values": {
+                        "cluster_mode": [
+                            {}
+                        ],
+                        "member_clusters": [
+                            false
+                        ],
+                        "security_group_ids": [
+                            false
+                        ],
+                        "security_group_names": [],
+                        "tags": {},
+                        "tags_all": {}
+                    },
+                    "depends_on": [
+                        "data.aws_region.current",
+                        "aws_elasticache_subnet_group.buffer",
+                        "aws_iam_role.app_role",
+                        "aws_kms_key.cache_kms_encrypt",
+                        "aws_security_group.db",
+                        "data.aws_caller_identity.current",
+                        "data.aws_iam_policy_document.app_role_assume_role_policy",
+                        "data.aws_iam_policy_document.cache_kms_policy"
+                    ]
+                }
