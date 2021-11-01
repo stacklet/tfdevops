@@ -7,7 +7,7 @@ import pytest
 
 
 @pytest.fixture()
-def validator():
+def validate():
     def schema_validate(translator, resource):
         schema_path = f"schema.{translator.tf_type}.json"
         schema = load_data(schema_path)
