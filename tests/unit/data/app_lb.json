@@ -1,0 +1,126 @@
+                        {
+                            "address": "module.sample.aws_lb.s3_proxy",
+                            "mode": "managed",
+                            "type": "aws_lb",
+                            "name": "s3_proxy",
+                            "provider_name": "registry.terraform.io/hashicorp/aws",
+                            "schema_version": 0,
+                            "values": {
+                                "access_logs": [
+                                    {
+                                        "bucket": "",
+                                        "enabled": false,
+                                        "prefix": ""
+                                    }
+                                ],
+                                "arn": "arn:aws:elasticloadbalancing:us-east-1:112233445566:loadbalancer/app/dev-stacklet-s3-proxy/f3b1263036fbba6e",
+                                "arn_suffix": "app/dev-stacklet-s3-proxy/f3b1263036fbba6e",
+                                "customer_owned_ipv4_pool": "",
+                                "dns_name": "dev-stacklet-s3-proxy-1492509259.us-east-1.elb.amazonaws.com",
+                                "drop_invalid_header_fields": false,
+                                "enable_cross_zone_load_balancing": null,
+                                "enable_deletion_protection": false,
+                                "enable_http2": true,
+                                "id": "arn:aws:elasticloadbalancing:us-east-1:112233445566:loadbalancer/app/dev-stacklet-s3-proxy/f3b1263036fbba6e",
+                                "idle_timeout": 60,
+                                "internal": false,
+                                "ip_address_type": "ipv4",
+                                "load_balancer_type": "application",
+                                "name": "dev-stacklet-s3-proxy",
+                                "name_prefix": null,
+                                "security_groups": [
+                                    "sg-05a5354352e11fcaf"
+                                ],
+                                "subnet_mapping": [
+                                    {
+                                        "allocation_id": "",
+                                        "ipv6_address": "",
+                                        "outpost_id": "",
+                                        "private_ipv4_address": "",
+                                        "subnet_id": "subnet-0002702c64ad63187"
+                                    },
+                                    {
+                                        "allocation_id": "",
+                                        "ipv6_address": "",
+                                        "outpost_id": "",
+                                        "private_ipv4_address": "",
+                                        "subnet_id": "subnet-0395f575be6823738"
+                                    },
+                                    {
+                                        "allocation_id": "",
+                                        "ipv6_address": "",
+                                        "outpost_id": "",
+                                        "private_ipv4_address": "",
+                                        "subnet_id": "subnet-03f1645fc355b8886"
+                                    },
+                                    {
+                                        "allocation_id": "",
+                                        "ipv6_address": "",
+                                        "outpost_id": "",
+                                        "private_ipv4_address": "",
+                                        "subnet_id": "subnet-0867db2dcb1462488"
+                                    },
+                                    {
+                                        "allocation_id": "",
+                                        "ipv6_address": "",
+                                        "outpost_id": "",
+                                        "private_ipv4_address": "",
+                                        "subnet_id": "subnet-0ba582f1e2af5d98a"
+                                    },
+                                    {
+                                        "allocation_id": "",
+                                        "ipv6_address": "",
+                                        "outpost_id": "",
+                                        "private_ipv4_address": "",
+                                        "subnet_id": "subnet-0f980e725d9272471"
+                                    }
+                                ],
+                                "subnets": [
+                                    "subnet-0002702c64ad63187",
+                                    "subnet-0395f575be6823738",
+                                    "subnet-03f1645fc355b8886",
+                                    "subnet-0867db2dcb1462488",
+                                    "subnet-0ba582f1e2af5d98a",
+                                    "subnet-0f980e725d9272471"
+                                ],
+                                "tags": {},
+                                "tags_all": {
+                                    "stacklet:app": "Stacklet Platform"
+                                },
+                                "timeouts": null,
+                                "vpc_id": "vpc-029654b93830acd5a",
+                                "zone_id": "Z35SXDOTRQ7X7K"
+                            },
+                            "sensitive_values": {
+                                "access_logs": [
+                                    {}
+                                ],
+                                "security_groups": [
+                                    false
+                                ],
+                                "subnet_mapping": [
+                                    {},
+                                    {},
+                                    {},
+                                    {},
+                                    {},
+                                    {}
+                                ],
+                                "subnets": [
+                                    false,
+                                    false,
+                                    false,
+                                    false,
+                                    false,
+                                    false
+                                ],
+                                "tags": {},
+                                "tags_all": {}
+                            },
+                            "depends_on": [
+                                "module.sample.aws_ec2_managed_prefix_list.intra_stacklet_vpc_prefixes",
+                                "module.sample.aws_security_group.customer_inbound_security_group",
+                                "module.sample.data.aws_subnet.stacklet_app_subnet",
+                                "module.sample.data.aws_vpc.stacklet_app_vpc"
+                            ]
+                        }

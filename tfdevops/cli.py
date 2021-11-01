@@ -804,6 +804,29 @@ class Lambda(Translator):
         return cfr
 
 
+class Elbv2(Translator):
+
+    tf_type = "lb"
+    cfn_type = "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    id = "id"
+    rename = {"subnet_mapping": "SubnetMappings", "load_balancer_type": "Type"}
+    strip = ("dns_name", "arn_suffix", "access_logs", "vpc_id", "zone_id")
+
+    attributes = {
+        "IdleTimeout": "idle_timeout.timeout_seconds",
+        "EnableHttp2": "routing.http2.enabled",
+    }
+
+    def get_properties(self, tfr):
+        cfr = super().get_properties(tfr)
+        for k, v in self.attributes.items():
+            cv = cfr.pop(k)
+            if cv is None:
+                continue
+            cfr.setdefault("LoadBalancerAttributes", {})[v] = cv and "true" or "false"
+        return cfr
+
+
 class StateMachine(Translator):
 
     tf_type = "sfn_state_machine"
