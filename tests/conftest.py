@@ -15,9 +15,9 @@ def load_data(filename, location="unit"):
 
 
 def write_data(filename, data, location="unit"):
-    fpath = (Path(__file__).parent / location / "data" / filename)
+    fpath = Path(__file__).parent / location / "data" / filename
     if not fpath.exists():
-        fpath.write_text(data)        
+        fpath.write_text(data)
 
 
 @pytest.fixture()
