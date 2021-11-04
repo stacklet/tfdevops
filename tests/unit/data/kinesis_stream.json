@@ -1,0 +1,40 @@
+{
+  "address": "aws_kinesis_stream.test_stream",
+  "mode": "managed",
+  "type": "aws_kinesis_stream",
+  "name": "test_stream",
+  "provider_name": "registry.terraform.io/hashicorp/aws",
+  "schema_version": 1,
+  "values": {
+    "arn": "arn:aws:kinesis:us-east-2:112233445566:stream/test-poetic-marten",
+    "encryption_type": "NONE",
+    "enforce_consumer_deletion": false,
+    "id": "arn:aws:kinesis:us-east-2:112233445566:stream/test-poetic-marten",
+    "kms_key_id": "",
+    "name": "test-poetic-marten",
+    "retention_period": 48,
+    "shard_count": 1,
+    "shard_level_metrics": [
+      "IncomingBytes",
+      "OutgoingBytes"
+    ],
+    "tags": {
+      "Environment": "test"
+    },
+    "tags_all": {
+      "Environment": "test"
+    },
+    "timeouts": null
+  },
+  "sensitive_values": {
+    "shard_level_metrics": [
+      false,
+      false
+    ],
+    "tags": {},
+    "tags_all": {}
+  },
+  "depends_on": [
+    "random_pet.name"
+  ]
+}

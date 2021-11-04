@@ -61,4 +61,4 @@ jobs:
 
       - name: Pytest
         shell: bash
-        run: poetry run pytest -v tests
+        run: poetry run pytest -v tests/unit

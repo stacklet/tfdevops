@@ -6,6 +6,20 @@ import jsonschema
 import pytest
 
 
+def load_data(filename, location="unit"):
+    path = Path(__file__).parent / location / "data" / filename
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def write_data(filename, data, location="unit"):
+    fpath = Path(__file__).parent / location / "data" / filename
+    if not fpath.exists():
+        fpath.write_text(data)
+
+
 @pytest.fixture()
 def validate():
     def schema_validate(translator, resource):
@@ -15,9 +29,7 @@ def validate():
             cfn = boto3.client("cloudformation")
             rtype = cfn.describe_type(TypeName=translator.cfn_type, Type="RESOURCE")
             schema = json.loads(rtype["Schema"])
-            (Path(__file__).parent / "data" / schema_path).write_text(
-                json.dumps(schema, indent=2)
-            )
+            write_data(schema_path, json.dumps(schema, indent=2))
 
         props = set(resource)
         sprops = set(schema["properties"].keys())
@@ -40,11 +52,3 @@ def validate():
             )
 
     return schema_validate
-
-
-def load_data(filename):
-    path = Path(__file__).parent / "data" / filename
-    if not path.exists():
-        return None
-    with open(path) as f:
-        return json.load(f)
