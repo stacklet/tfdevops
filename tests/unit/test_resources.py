@@ -14,3 +14,9 @@ def test_app_lb(validate):
     resource = load_data("app_lb.json")
     props = translator.get_properties(resource)
     validate(translator, props)
+
+
+def test_kinesis(validate):
+    translator = Translator.get_translator("kinesis_stream")()
+    resource = load_data("kinesis_stream.json")
+    validate(translator, translator.get_properties(resource))

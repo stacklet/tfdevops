@@ -597,6 +597,9 @@ class Translator:
         parts = [p.capitalize() for p in k.split("_")]
         return "".join(parts)
 
+    def get_tags(self, tag_map):
+        return [{"Key": k, "Value": v} for k, v in tag_map.items()]
+
     def camel(self, d):
         r = {}
 
@@ -765,6 +768,20 @@ class Topic(Translator):
         return {self.id: r["values"]["arn"]}
 
 
+class KinesisStream(Translator):
+
+    tf_type = "kinesis_stream"
+    cfn_type = "AWS::Kinesis::Stream"
+    id = "Name"
+    strip = ("shard_level_metrics", "encryption_type")
+    rename = {"retention_period": "RetentionPeriodHours"}
+
+    def get_properties(self, tfr):
+        cfr = super().get_properties(tfr)
+        cfr["Tags"] = self.get_tags(cfr.get("Tags", {}))
+        return cfr
+
+
 class Lambda(Translator):
 
     tf_type = "lambda_function"
@@ -796,9 +813,7 @@ class Lambda(Translator):
                 "variables"
             ]
         cfr["Code"] = {"ZipFile": tfr["values"]["filename"]}
-        cfr["Tags"] = [
-            {"Key": k, "Value": v} for k, v in tfr["values"].get("Tags", {}).items()
-        ]
+        cfr["Tags"] = self.get_tags(tfr["values"].get("Tags", {}))
         if "VpcConfig" in cfr:
             cfr["VpcConfig"].pop("VpcId")
         return cfr
