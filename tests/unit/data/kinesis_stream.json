@@ -6,10 +6,10 @@
   "provider_name": "registry.terraform.io/hashicorp/aws",
   "schema_version": 1,
   "values": {
-    "arn": "arn:aws:kinesis:us-east-2:490065885863:stream/test-poetic-marten",
+    "arn": "arn:aws:kinesis:us-east-2:112233445566:stream/test-poetic-marten",
     "encryption_type": "NONE",
     "enforce_consumer_deletion": false,
-    "id": "arn:aws:kinesis:us-east-2:490065885863:stream/test-poetic-marten",
+    "id": "arn:aws:kinesis:us-east-2:112233445566:stream/test-poetic-marten",
     "kms_key_id": "",
     "name": "test-poetic-marten",
     "retention_period": 48,
