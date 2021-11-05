@@ -1,5 +1,6 @@
 from conftest import load_data
-from tfdevops.cli import Translator, filter_empty
+from tfdevops.resource import Translator
+from tfdevops.utils import filter_empty
 
 
 def test_elasticache_replication_group(validate):
