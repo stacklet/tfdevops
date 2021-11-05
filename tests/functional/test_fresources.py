@@ -2,7 +2,7 @@ import json
 
 import conftest
 from pytest_terraform import terraform
-from tfdevops.cli import Translator, get_state_resources
+from tfdevops.resource import Translator, get_state_resources
 
 
 def get_state_path(tmpdir, tf_resources):
