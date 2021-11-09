@@ -3,7 +3,7 @@ from tfdevops.resource import Translator
 from tfdevops.utils import filter_empty
 
 
-def test_elasticache_replication_group(validate):
+def xtest_elasticache_replication_group(validate):
     translator = Translator.get_translator("elasticache_replication_group")()
     resource = load_data("elasticache.json")
     props = translator.get_properties(resource)

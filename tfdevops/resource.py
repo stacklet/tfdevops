@@ -30,7 +30,7 @@ class Translator:
         return self._camel_str(r["name"])
 
     def get_identity(self, r):
-        return {self.id: r["values"]["name"]}
+        return {self.id: r["values"]["id"]}
 
     def get_properties(self, tf):
         tfv = self.filter_empty(tf["values"])
@@ -143,7 +143,7 @@ class DbInstance(Translator):
         return cfr
 
 
-class ElasticacheReplicationGroup(Translator):
+class ElasticacheReplicationGroup:
 
     tf_type = "elasticache_replication_group"
     cfn_type = "AWS::ElastiCache::ReplicationGroup"

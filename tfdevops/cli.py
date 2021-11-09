@@ -34,8 +34,8 @@ def cli(verbose):
 @click.option("-u", "--template-url", help="s3 path to template")
 @click.option("-s", "--stack-name", default=DEFAULT_STACK_NAME)
 @click.option("--change-name", default=DEFAULT_CHANGESET_NAME)
-@click.option("--guru", is_flag=True, default=False)
-def deploy(template, resources, stack_name, guru, template_url, change_name):
+@click.option("--no-guru", is_flag=True, default=False)
+def deploy(template, resources, stack_name, no_guru, template_url, change_name):
     """Deploy a cloudformation stack with imported resources
 
     Imports terraform resources into a cloudformation stack.
@@ -49,8 +49,18 @@ def deploy(template, resources, stack_name, guru, template_url, change_name):
     if template:
         stack_content = json.load(template)
     import_resources = json.load(resources)
-    cfn.deploy(
-        stack_name, stack_content, template_url, import_resources, change_name, guru
+    cfn.deploy(stack_name, stack_content, template_url, import_resources, change_name)
+
+    if no_guru is False:
+        ensure_devops_guru(stack_name)
+
+
+def ensure_devops_guru(stack_name):
+    log.info("Enrolling terraform stack into devops guru")
+    guru = boto3.client("devops-guru")
+    guru.update_resource_collection(
+        Action="ADD",
+        ResourceCollection={"CloudFormation": {"StackNames": [stack_name]}},
     )
 
 
