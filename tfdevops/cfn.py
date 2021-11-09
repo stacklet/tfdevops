@@ -109,9 +109,7 @@ def get_cfn_template(s3_client, s3_path, module, state_file, types):
     return ctemplate, ids
 
 
-def deploy(
-    stack_name, stack_content, template_url, import_resources, change_name, guru=True
-):
+def deploy(stack_name, stack_content, template_url, import_resources, change_name):
     client = boto3.client("cloudformation")
 
     try:
@@ -315,10 +313,3 @@ def deploy(
     waiter.wait(StackName=stack_name, WaiterConfig={"Delay": 15, "MaxAttempts": 100})
 
     log.info("Cloudformation Stack Deployed - Terraform resources imported")
-    if guru:
-        log.info("Enrolling terraform stack into devops guru")
-        guru = boto3.client("devops-guru")
-        guru.update_resource_collection(
-            Action="ADD",
-            ResourceCollection={"CloudFormation": {"StackNames": [stack_name]}},
-        )

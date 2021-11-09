@@ -4,7 +4,7 @@ lint:
   pre-commit run --all-files
 
 test:
-  pytest -v tests/unit
+  pytest --cov=tfdevops --cov-report=term-missing -v tests/unit
 
 image:
   DOCKER_BUILDKIT=1 docker buildx build \
