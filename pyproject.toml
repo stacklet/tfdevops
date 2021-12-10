@@ -1,9 +1,10 @@
 [tool.poetry]
 name = "tfdevops"
-version = "0.1.0"
+version = "0.1.1"
 description = "Terraform Support for AWS DevOps Guru"
 authors = ["Kapil Thangavelu <kapilt@gmail.com>"]
 license = "Apache-2.0"
+readme = "readme.md"
 
 [tool.poetry.scripts]
 tfdevops = 'tfdevops.cli:cli'
